@@ -91,7 +91,7 @@ window.CIRCUIT = {
 };
 ```
 
-Pin references: `"part.PIN"` (first match on any edge), `"part.edge.PIN"` (edge = left/right/top/bottom),
+Pin references: `"part.PIN"` (first match on any edge; keep part x,y ≥ 16 so they clear the ruler strip), `"part.edge.PIN"` (edge = left/right/top/bottom),
 `"rail:<rail id>"` (only as `to`, or either end — the engine swaps). Pin ids may contain dots (`uno.3.3V` works).
 Wire steps are counted in the progress pill ("7 / 18 wires"); task steps have a checkbox but do not count.
 
@@ -155,9 +155,19 @@ object shape above.
 
 ## What the page does (so you can describe it to the user)
 
-Two panes (diagram left, steps right; stacked on phones, the diagram pans horizontally). Clicking a step or a wire
-selects it: the wire draws on, its two pins get rings, the Inspector shows both pins' descriptions. Checkbox,
-Space, ArrowUp/Down or j/k, Previous/Next, Reset progress (two clicks), progress pill and bar; everything persists
-in localStorage under the project id. Hover a pin or part for a tooltip; tap/click or keyboard-focus to put the same
-text in the Inspector. Drag parts to re-layout; Copy/Reset layout. Sound toggle in the header (synthesised UI sounds,
-off state remembered). Legend of used colours and a generated pin map at the bottom. A red banner lists data problems.
+A retro "circuit puzzle console": riveted steel panels on a dark teal screen. Desktop is three columns: left
+widgets (STAGE n + WIRES done/total, a SIGNAL oscilloscope that blips on every event, COMPONENTS with per-part
+wire counts, INSPECTOR), the board in the middle (PCB green with a copper grid and ruler strips; parts and wires
+lie on it), STEPS on the right (stage/step list, Check boxes, vertical progress bar with percent). Phones stack
+board, steps, widgets; the board pans horizontally. Not-done wires are dim copper dashed traces; done wires glow in
+their colour; the selected wire pulses, draws on, and its two pins get rings while the Inspector shows both pins'
+descriptions. Checkbox, Space, ArrowUp/Down or j/k, Previous/Next, Reset progress (two clicks); everything
+persists in localStorage under the project id. Hover a pin or part for a tooltip; tap/click or keyboard-focus puts
+the same text in the Inspector. Drag parts to re-layout (keep x,y >= 16: the ruler strip); Copy/Reset layout in the
+header. SND switch in the header (synthesised UI sounds incl. a power-up when a stage completes; off state
+remembered). Legend under the board, generated PIN MAP panel at the bottom. A red banner lists data problems.
+
+Style tokens live on `:root` in `circutiviz.js` (`--screen`, `--steel`, `--steel-hi`, `--steel-lo`, `--pcb`,
+`--copper`, `--glow-green`, `--glow-red`, `--px-yellow`, `--px-green`, `--accent`, `--ink`, `--muted`, wire colours as
+`--w-<key>`). Fonts: Press Start 2P (panel headers, counters, >= 11 px), Share Tech Mono (pins, code, inspector),
+IBM Plex Sans (step text). GSAP (cdnjs, pinned 3.12.5) is optional; without it only CSS transitions remain.
