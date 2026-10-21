@@ -1,6 +1,6 @@
 /* CircutiViz — a data-driven breadboard wiring guide. One file, vanilla JS, no build step.
    Load order: gsap (optional) → components.js (catalog) → your wiring.js (sets window.CIRCUIT) → circutiviz.js.
-   Exposes window.CircutiViz = { validate(circuit, catalog), render(circuit, catalog, root) }.
+   Exposes window.CircutiViz = { validate(circuit, catalog), render(circuit, catalog, root), renderLibrary(catalog, root) }.
    Data format: README.md / CLAUDE.md. */
 (function () {
 "use strict";
@@ -425,6 +425,84 @@ function makeScope(reducedMotion) {
   return c;
 }
 
+/* ---------- part drawing (shared by the wiring page and the library) ---------- */
+const PCB = { black: "var(--pcb-black)", blue: "var(--pcb-blue)", green: "var(--pcb-green)", purple: "var(--pcb-purple)" };
+const fillOf = (p) => PCB[p.style] || p.style || PCB.green;
+const padOf = (p) => p.style === "black" || !p.style ? "var(--pad-gold)" : "var(--pad-silver)";
+const pinName = (pin) => `${pin.part.short} ${pin.id}${pin.sub ? ` (${pin.sub})` : ""}`;
+function mkSticker(stickers, text, x, y, anchor, cls) { // small dark tag so text never sits directly on the board
+  const t = svg("text", { class: "stk-t " + (cls || ""), x, y, "text-anchor": anchor }, text), r = svg("rect", { class: "stk", rx: 3 });
+  stickers.push([r, t]); return svg("g", { class: "sticker" }, r, t);
+}
+function fitStickers(stickers) { for (const [r, t] of stickers) { const b = t.getBBox(); r.setAttribute("x", b.x - 6); r.setAttribute("y", b.y - 2.5); r.setAttribute("width", b.width + 12); r.setAttribute("height", b.height + 5); } }
+function pinText(pin, x, y, anchor, transform) {
+  const room = pin.edge === "left" || pin.edge === "right" ? pin.part.w : pin.part.h;
+  const main = svg("tspan", null, pin.id), sub = pin.sub && room >= 70 ? svg("tspan", { class: "sub", dx: 4 }, pin.sub) : null; // tiny bodies: id only
+  const t = svg("text", { class: "pin-lbl", x, y, "text-anchor": anchor, transform });
+  if (anchor === "end") { if (sub) { sub.removeAttribute("dx"); main.setAttribute("dx", 4); t.append(sub); } t.append(main); }
+  else { t.append(main); if (sub) t.append(sub); }
+  return t;
+}
+/* body, decor, name sticker, leads and pin labels of one placed part -> { g, lift, body } */
+function drawPart(p, stickers) {
+  const lift = svg("g", { class: "lift" }), g = svg("g", { class: "part" + (isLight(p.style) ? " ink-dark" : "") }, lift);
+  const cx = p.x + p.w / 2, cy = p.y + p.h / 2, m = Math.min(p.w, p.h);
+  const body = svg("rect", { class: "body", x: p.x, y: p.y, width: p.w, height: p.h, rx: p.kind === "component" ? 5 : 8, fill: fillOf(p) });
+  lift.append(body);
+  for (const d of p.decor || []) {
+    const ox = d.x != null ? p.x + d.x : null, oy = d.y != null ? p.y + d.y : null;
+    if (d.type === "chip") {
+      const s = Math.min(m * 0.34, p.w - 96), x = (ox != null ? ox : cx) - s / 2, y = (oy != null ? oy : cy) - s / 2; // leave ~48 per side for pin labels
+      if (s >= 18) lift.append(svg("rect", { x, y, width: s, height: s, rx: 3, fill: "var(--chip)", stroke: "#55575f" }),
+        svg("text", { class: "decor-lbl", x: x + s / 2, y: y + s / 2 + 3, "text-anchor": "middle", fill: "var(--part-ink)" }, d.label || ""));
+    } else if (d.type === "usb") {
+      lift.append(svg("rect", { x: (ox != null ? ox : cx) - 14, y: (oy != null ? oy : p.y) - 7, width: 28, height: 14, rx: 3, fill: "var(--pad-silver)", stroke: "#7d8591" }));
+    } else if (d.type === "screen") {
+      const r = m * 0.4, x = ox != null ? ox : cx, y = oy != null ? oy : cy;
+      lift.append(svg("circle", { cx: x, cy: y, r: r + 4, fill: "#2a2f38" }), svg("circle", { cx: x, cy: y, r, fill: "var(--glass)" }),
+        svg("circle", { cx: x - r * 0.35, cy: y - r * 0.35, r: r * 0.18, fill: "#fff", opacity: 0.08 }));
+    } else if (d.type === "panel") {
+      const w = d.w || p.w * 0.7, h = d.h || p.h * 0.55, x = (ox != null ? ox : cx) - w / 2, y = (oy != null ? oy : cy) - h / 2;
+      lift.append(svg("rect", { x, y, width: w, height: h, rx: 3, fill: "var(--glass)", stroke: "#2a2f38", "stroke-width": 3 }));
+    } else if (d.type === "button") {
+      const at = d.at || "tl", x = ox != null ? ox : p.x + p.w * (at[1] === "l" ? 0.28 : 0.72), y = oy != null ? oy : (at[0] === "t" ? p.y + 10 : p.y + p.h - 10);
+      lift.append(svg("rect", { x: x - 6, y: y - 6, width: 12, height: 12, rx: 2, fill: "#d9dde3", stroke: "#7d8591" }),
+        svg("text", { class: "decor-lbl", x, y: y + 3, "text-anchor": "middle", fill: "#1a1d23" }, d.label || ""));
+    } else if (d.type === "led") {
+      const x = ox != null ? ox : cx, y = oy != null ? oy : p.y + p.h * 0.68;
+      lift.append(svg("circle", { cx: x - 16, cy: y, r: 3, fill: "#ff5b4a" }), svg("text", { class: "decor-lbl", x: x - 9, y: y + 3 }, d.label || ""));
+    }
+  }
+  const hasTop = p.pinList.some(q => q.edge === "top"), hasBottom = p.pinList.some(q => q.edge === "bottom"), lead = p.kind === "component" ? LEAD : 0;
+  const nameY = !hasBottom ? p.y + p.h + 19 : !hasTop ? p.y - 9 : p.y + p.h + lead + 31;
+  lift.append(mkSticker(stickers, p.name, cx, nameY, "middle", "part-name"));
+  for (const pin of p.pinList) {
+    if (lead) lift.append(svg("line", { class: "lead", x1: pin.lx, y1: pin.ly, x2: pin.x, y2: pin.y }));
+    if (pin.edge === "left") lift.append(pinText(pin, pin.lx + 9, pin.ly + 3.5, "start"));
+    else if (pin.edge === "right") lift.append(pinText(pin, pin.lx - 9, pin.ly + 3.5, "end"));
+    else if (pin.edge === "top") lift.append(pinText(pin, pin.lx + 9, pin.ly + 3.5, "start", `rotate(90 ${pin.lx} ${pin.ly})`));
+    else lift.append(pinText(pin, pin.lx - 9, pin.ly + 3.5, "end", `rotate(90 ${pin.lx} ${pin.ly})`));
+  }
+  return { g, lift, body };
+}
+/* pads + highlight rings of one part (drawn above the wires) -> { g, map: { "part.edge.PIN": <g.pin> } } */
+function drawPins(p) {
+  const g = svg("g", { class: "pins" }), map = {};
+  for (const pin of p.pinList) {
+    map[pin.ref] = svg("g", { class: "pin", tabindex: 0, "aria-label": `${pinName(pin)}: ${pin.io || "pin"}. ${pin.desc || ""}` },
+      svg("circle", { class: "ring", cx: pin.x, cy: pin.y, r: 8.5 }), svg("circle", { class: "pad", cx: pin.x, cy: pin.y, r: 4.5, fill: padOf(p) }));
+    g.append(map[pin.ref]);
+  }
+  return { g, map };
+}
+function mountStyle(COLORS) {
+  if (document.getElementById("cv-style")) return;
+  document.head.append(
+    el("link", { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }),
+    el("link", { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&family=IBM+Plex+Sans:wght@400;500;600&display=swap" }),
+    el("style", { id: "cv-style" }, CSS(Object.entries(COLORS).map(([k, v]) => `--w-${k}:${v}`).join(";")) + LIB_CSS));
+}
+
 /* ---------- render ---------- */
 function render(C, catalog, root) {
   root = root || document.getElementById("circutiviz") || document.body;
@@ -448,70 +526,13 @@ function render(C, catalog, root) {
   for (let i = 1, x = RULER + CM; x < W - 10; i++, x += CM) rul.append(svg("line", { class: "ruler-l", x1: x, y1: RULER - 5, x2: x, y2: RULER }), svg("line", { class: "ruler-l", x1: x - CM / 2, y1: RULER - 3, x2: x - CM / 2, y2: RULER }), svg("text", { class: "ruler-t", x, y: 9, "text-anchor": "middle" }, String(i)));
   for (let i = 1, y = RULER + CM; y < H - 10; i++, y += CM) rul.append(svg("line", { class: "ruler-l", x1: RULER - 5, y1: y, x2: RULER, y2: y }), svg("line", { class: "ruler-l", x1: RULER - 3, y1: y - CM / 2, x2: RULER, y2: y - CM / 2 }), svg("text", { class: "ruler-t", x: 8, y: y + 3, "text-anchor": "middle" }, String(i)));
   diagram.append(rul);
-  const PCB = { black: "var(--pcb-black)", blue: "var(--pcb-blue)", green: "var(--pcb-green)", purple: "var(--pcb-purple)" };
-  const fillOf = (p) => PCB[p.style] || p.style || PCB.green;
-  const padOf = (p) => p.style === "black" || !p.style ? "var(--pad-gold)" : "var(--pad-silver)";
-  const stickers = [];
-  function sticker(text, x, y, anchor, cls) { // small dark tag so text never sits directly on the board
-    const t = svg("text", { class: "stk-t " + (cls || ""), x, y, "text-anchor": anchor }, text), r = svg("rect", { class: "stk", rx: 3 });
-    stickers.push([r, t]); return svg("g", { class: "sticker" }, r, t);
-  }
-  const fitStickers = () => { for (const [r, t] of stickers) { const b = t.getBBox(); r.setAttribute("x", b.x - 6); r.setAttribute("y", b.y - 2.5); r.setAttribute("width", b.width + 12); r.setAttribute("height", b.height + 5); } };
+  const stickers = [], sticker = (t, x, y, a, c) => mkSticker(stickers, t, x, y, a, c);
   for (const r of rails) {
     const x1 = r.x1 != null ? r.x1 : 40, x2 = r.x2 != null ? r.x2 : W - 40, col = `var(--w-${COLORS[r.color || r.id] ? r.color || r.id : "wire"})`;
     diagram.append(svg("rect", { class: "rail", x: x1, y: r.y - 3, width: x2 - x1, height: 6, rx: 2, fill: col }), sticker(r.label || r.id, x1, r.y - 8, "start", "rail-lbl"));
   }
-  function pinText(pin, x, y, anchor, transform) {
-    const room = pin.edge === "left" || pin.edge === "right" ? pin.part.w : pin.part.h;
-    const main = svg("tspan", null, pin.id), sub = pin.sub && room >= 70 ? svg("tspan", { class: "sub", dx: 4 }, pin.sub) : null; // tiny bodies: id only
-    const t = svg("text", { class: "pin-lbl", x, y, "text-anchor": anchor, transform });
-    if (anchor === "end") { if (sub) { sub.removeAttribute("dx"); main.setAttribute("dx", 4); t.append(sub); } t.append(main); }
-    else { t.append(main); if (sub) t.append(sub); }
-    return t;
-  }
-  const pinName = (pin) => `${pin.part.short} ${pin.id}${pin.sub ? ` (${pin.sub})` : ""}`;
   const partEls = {}, pinEls = {};
-  for (const p of parts) {
-    const lift = svg("g", { class: "lift" }), g = svg("g", { class: "part" + (isLight(p.style) ? " ink-dark" : "") }, lift);
-    const cx = p.x + p.w / 2, cy = p.y + p.h / 2, m = Math.min(p.w, p.h);
-    const body = svg("rect", { class: "body", x: p.x, y: p.y, width: p.w, height: p.h, rx: p.kind === "component" ? 5 : 8, fill: fillOf(p) });
-    lift.append(body); partEls[p.id] = body; p.g = g; p.rx = p.x; p.ry = p.y;
-    for (const d of p.decor || []) {
-      const ox = d.x != null ? p.x + d.x : null, oy = d.y != null ? p.y + d.y : null;
-      if (d.type === "chip") {
-        const s = Math.min(m * 0.34, p.w - 96), x = (ox != null ? ox : cx) - s / 2, y = (oy != null ? oy : cy) - s / 2; // leave ~48 per side for pin labels
-        if (s >= 18) lift.append(svg("rect", { x, y, width: s, height: s, rx: 3, fill: "var(--chip)", stroke: "#55575f" }),
-          svg("text", { class: "decor-lbl", x: x + s / 2, y: y + s / 2 + 3, "text-anchor": "middle", fill: "var(--part-ink)" }, d.label || ""));
-      } else if (d.type === "usb") {
-        lift.append(svg("rect", { x: (ox != null ? ox : cx) - 14, y: (oy != null ? oy : p.y) - 7, width: 28, height: 14, rx: 3, fill: "var(--pad-silver)", stroke: "#7d8591" }));
-      } else if (d.type === "screen") {
-        const r = m * 0.4, x = ox != null ? ox : cx, y = oy != null ? oy : cy;
-        lift.append(svg("circle", { cx: x, cy: y, r: r + 4, fill: "#2a2f38" }), svg("circle", { cx: x, cy: y, r, fill: "var(--glass)" }),
-          svg("circle", { cx: x - r * 0.35, cy: y - r * 0.35, r: r * 0.18, fill: "#fff", opacity: 0.08 }));
-      } else if (d.type === "panel") {
-        const w = d.w || p.w * 0.7, h = d.h || p.h * 0.55, x = (ox != null ? ox : cx) - w / 2, y = (oy != null ? oy : cy) - h / 2;
-        lift.append(svg("rect", { x, y, width: w, height: h, rx: 3, fill: "var(--glass)", stroke: "#2a2f38", "stroke-width": 3 }));
-      } else if (d.type === "button") {
-        const at = d.at || "tl", x = ox != null ? ox : p.x + p.w * (at[1] === "l" ? 0.28 : 0.72), y = oy != null ? oy : (at[0] === "t" ? p.y + 10 : p.y + p.h - 10);
-        lift.append(svg("rect", { x: x - 6, y: y - 6, width: 12, height: 12, rx: 2, fill: "#d9dde3", stroke: "#7d8591" }),
-          svg("text", { class: "decor-lbl", x, y: y + 3, "text-anchor": "middle", fill: "#1a1d23" }, d.label || ""));
-      } else if (d.type === "led") {
-        const x = ox != null ? ox : cx, y = oy != null ? oy : p.y + p.h * 0.68;
-        lift.append(svg("circle", { cx: x - 16, cy: y, r: 3, fill: "#ff5b4a" }), svg("text", { class: "decor-lbl", x: x - 9, y: y + 3 }, d.label || ""));
-      }
-    }
-    const hasTop = p.pinList.some(q => q.edge === "top"), hasBottom = p.pinList.some(q => q.edge === "bottom"), lead = p.kind === "component" ? LEAD : 0;
-    const nameY = !hasBottom ? p.y + p.h + 19 : !hasTop ? p.y - 9 : p.y + p.h + lead + 31;
-    lift.append(sticker(p.name, cx, nameY, "middle", "part-name"));
-    for (const pin of p.pinList) {
-      if (lead) lift.append(svg("line", { class: "lead", x1: pin.lx, y1: pin.ly, x2: pin.x, y2: pin.y }));
-      if (pin.edge === "left") lift.append(pinText(pin, pin.lx + 9, pin.ly + 3.5, "start"));
-      else if (pin.edge === "right") lift.append(pinText(pin, pin.lx - 9, pin.ly + 3.5, "end"));
-      else if (pin.edge === "top") lift.append(pinText(pin, pin.lx + 9, pin.ly + 3.5, "start", `rotate(90 ${pin.lx} ${pin.ly})`));
-      else lift.append(pinText(pin, pin.lx - 9, pin.ly + 3.5, "end", `rotate(90 ${pin.lx} ${pin.ly})`));
-    }
-    diagram.append(g);
-  }
+  for (const p of parts) { const d = drawPart(p, stickers); partEls[p.id] = d.body; p.g = d.g; p.rx = p.x; p.ry = p.y; diagram.append(d.g); }
   const wiresG = svg("g", { class: "wires" }), pinsG = svg("g", { class: "pins" });
   const drawOrder = [...wires.filter(w => w.rail), ...wires.filter(w => !w.rail)];
   for (const w of drawOrder) {
@@ -523,11 +544,7 @@ function render(C, catalog, root) {
     w.el.addEventListener("mouseenter", SFX.hover);
     wiresG.append(w.el);
   }
-  for (const p of parts) for (const pin of p.pinList) {
-    pinEls[pin.ref] = svg("g", { class: "pin", tabindex: 0, "aria-label": `${pinName(pin)}: ${pin.io || "pin"}. ${pin.desc || ""}` },
-      svg("circle", { class: "ring", cx: pin.x, cy: pin.y, r: 8.5 }), svg("circle", { class: "pad", cx: pin.x, cy: pin.y, r: 4.5, fill: padOf(p) }));
-    pinsG.append(pinEls[pin.ref]);
-  }
+  for (const p of parts) { const d = drawPins(p); Object.assign(pinEls, d.map); pinsG.append(d.g); }
   diagram.append(wiresG, pinsG);
   function updateWire(w) {
     const d = wirePath(w); w.paths.forEach(pp => pp.setAttribute("d", d));
@@ -597,6 +614,7 @@ function render(C, catalog, root) {
   const layoutJSON = () => "{\n" + parts.map(p => `  "${p.id}": { "x": ${p.x}, "y": ${p.y} }`).join(",\n") + "\n}";
   const resetLayout = el("button", { type: "button", class: "btn sm quiet", id: "cv-layout-reset", onclick: () => { parts.forEach(p => movePart(p, p.x0, p.y0)); try { localStorage.removeItem(KEY + ":layout"); } catch (e) { /* ignore */ } SFX.drop(); } }, "Reset layout");
   const copyLayout = el("button", { type: "button", class: "btn sm quiet", id: "cv-layout-copy" }, "Copy layout");
+  const libLink = el("a", { class: "btn sm", id: "cv-library", href: C.libraryHref || "library.html" }, "LIBRARY");
   copyLayout.addEventListener("click", () => {
     const json = layoutJSON(), ok = () => { copyLayout.textContent = "Copied"; setTimeout(() => copyLayout.textContent = "Copy layout", 1500); SFX.select(); };
     const fallback = () => setInspector(el("p", null, "Clipboard blocked; select and copy this, then paste the x/y values into your wiring.js parts:"), el("pre", null, json));
@@ -663,7 +681,7 @@ function render(C, catalog, root) {
       el("tbody", null, rows.map(w => el("tr", null, el("td", null, el("b", { class: "pn" }, w.pa.id), w.pa.sub ? ` (${w.pa.sub})` : ""),
         el("td", null, endLabel(w.pb ? { pin: w.pb } : { rail: w.rail })), el("td", null, swatch(w.color), w.color)))))]));
   const page = el("div", { class: "cv" },
-    panel(null, "", "", el("div", { class: "cv-top" }, el("h1", null, C.title || C.id || "Wiring"), el("span", { class: "sp" }), soundBtn, resetLayout, copyLayout,
+    panel(null, "", "", el("div", { class: "cv-top" }, el("h1", null, C.title || C.id || "Wiring"), el("span", { class: "sp" }), soundBtn, libLink, resetLayout, copyLayout,
       C.subtitle ? el("p", { class: "cv-sub" }, C.subtitle) : null, (C.notes || []).length ? el("div", { class: "cv-notes" }, (C.notes || []).map(n => el("p", null, rich(n)))) : null)),
     el("div", { style: "height:16px" }), problemsBox,
     el("div", { class: "cv-grid" }, el("i", { class: "cable v a" }), el("i", { class: "cable v b" }), el("i", { class: "cable h" }),
@@ -733,13 +751,10 @@ function render(C, catalog, root) {
   }
 
   /* mount */
-  if (!document.getElementById("cv-style")) document.head.append(
-    el("link", { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }),
-    el("link", { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&family=IBM+Plex+Sans:wght@400;500;600&display=swap" }),
-    el("style", { id: "cv-style" }, CSS(Object.entries(COLORS).map(([k, v]) => `--w-${k}:${v}`).join(";"))));
+  mountStyle(COLORS);
   if (!document.title && C.title) document.title = C.title;
   root.append(page);
-  fitStickers(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitStickers);
+  fitStickers(stickers); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitStickers(stickers));
   armAudio(() => { if (problems.length) { SFX.error(); scope.blip("#ff3b3b", 1); } });
   steps.forEach(s => setDone(s.i, !!state.done[s.key]));
   refreshCounts();
@@ -766,6 +781,90 @@ function render(C, catalog, root) {
   return M;
 }
 
-if (typeof window !== "undefined") window.CircutiViz = { validate, render };
-if (typeof document !== "undefined") render(window.CIRCUIT, window.CIRCUTIVIZ_PARTS);
+/* ---------- component library view (library.html: <body data-view="library">, or CircutiViz.renderLibrary()) ---------- */
+const LIB_CSS = `
+.lib-head{position:sticky;top:8px;z-index:5;margin-bottom:16px}
+.lib-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-bottom:8px}
+.lib-row .sp{flex:1}
+.lib-search{flex:1;min-width:160px;font:14px/1.4 var(--f-mono);padding:7px 10px;background:var(--code-bg);border:2px solid var(--steel-lo);border-radius:4px;color:var(--ink)}
+.lib-search::placeholder{color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip-btn{font:11px/1 var(--f-px);padding:7px 9px;border-radius:4px;border:2px solid var(--steel-lo);background:var(--inner);color:var(--muted);cursor:pointer}
+.chip-btn[aria-pressed="true"]{color:var(--px-yellow);border-color:var(--px-yellow)}
+.lib-count{font:11px/1.6 var(--f-px);color:var(--px-green)}
+.lib-cat{margin-bottom:16px}
+.lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+.card{background:var(--inner);border:2px solid var(--steel-lo);border-radius:4px;padding:10px;display:grid;gap:8px;align-content:start}
+.card-svg{display:block;width:100%;height:auto;max-height:240px;background:var(--pcb);border:1px solid var(--steel-lo);border-radius:3px}
+.card h3{font:600 15px/1.3 var(--f-sans);text-transform:none;letter-spacing:0;color:var(--ink);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.badge{font:11px/1.4 var(--f-mono);padding:0 6px;border-radius:3px;border:1px solid var(--line);background:var(--code-bg);color:var(--muted)}
+.badge.warn{color:var(--px-yellow);border-color:var(--px-yellow)}
+.card p{margin:0;font-size:13.5px}
+.card p b{display:block;color:var(--px-green);font:11px/1.8 var(--f-px)}
+.pins-t{border-collapse:collapse;font-size:12.5px;width:100%}
+.pins-t td{padding:2px 6px 2px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.pins-t td:first-child{font-family:var(--f-mono);white-space:nowrap;color:var(--px-yellow)}
+.pins-t td:nth-child(2){font-family:var(--f-mono);color:var(--muted);white-space:nowrap}
+.io.power{color:#ff8a80}.io.gnd{color:#cfd5dc}.io.in{color:#8ab4ff}.io.out{color:#4cf2a1}.io.io{color:#ffd23f}.io.nc{color:#8a97a5}
+.card .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.card .acts code{margin-left:auto;font-size:12px}
+@media(max-width:600px){.lib-grid{grid-template-columns:1fr}.lib-head{position:static}}
+`;
+const CATS = [["boards", "Boards"], ["sensors", "Sensors"], ["displays", "Displays"], ["actuators", "Actuators"], ["radio", "Radio"], ["power", "Power"], ["passives", "Passives"], ["interface", "Interface"]];
+function renderLibrary(catalog, root) {
+  root = root || document.getElementById("circutiviz") || document.body;
+  catalog = catalog || window.CIRCUTIVIZ_PARTS || {};
+  mountStyle(colorTable({}));
+  const ids = Object.keys(catalog), stickers = [], cards = [];
+  for (const id of ids) {
+    const m = buildModel({ id: "lib", parts: [{ id: "p", part: id, x: 30, y: 30 }], rails: [], stages: [{ title: "x", check: "x", steps: [] }], canvas: { w: 2000, h: 2000 } }, catalog);
+    const p = m.parts[0], d = drawPart(p, stickers), pins = drawPins(p);
+    const sv = svg("svg", { class: "card-svg", viewBox: `${p.x - 30} ${p.y - 30} ${p.w + 60} ${p.h + 86}`, role: "img", "aria-label": p.name + " pinout" }, d.g, pins.g);
+    const snippet = `{ id: "${p.short.toLowerCase().replace(/\s+/g, "-")}", part: "${id}", x: 0, y: 0 }`;
+    const copy = el("button", { type: "button", class: "btn sm", "data-snippet": snippet }, "Copy snippet");
+    copy.addEventListener("click", () => {
+      const ok = () => { copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy snippet", 1500); }, fb = () => { copy.textContent = snippet; };
+      try { navigator.clipboard.writeText(snippet).then(ok, fb); } catch (e) { fb(); }
+    });
+    const rows = p.pinList.map(pin => el("tr", null, el("td", null, pin.id), el("td", null, pin.sub || ""), el("td", null, el("span", { class: "io " + (pin.io || "") }, pin.io || "pin")), el("td", null, pin.desc || "")));
+    const c = el("article", { class: "card", "data-cat": p.category || "", "data-id": id }, sv,
+      el("h3", null, p.name, el("span", { class: "tag" }, p.short), el("span", { class: "badge" }, p.kind), p.pinOrderVaries ? el("span", { class: "badge warn" }, "pin order varies") : null),
+      el("p", null, el("b", null, "USE IT WHEN"), p.use || ""), el("p", null, el("b", null, "WHAT IT IS"), p.info || ""),
+      el("table", { class: "pins-t" }, el("tbody", null, rows)),
+      el("div", { class: "acts" }, copy, p.datasheet ? el("a", { class: "btn sm quiet", href: p.datasheet, target: "_blank", rel: "noopener" }, "Datasheet") : null, el("code", null, id)));
+    c.dataset.q = [p.name, p.short, p.category, p.kind, id, ...p.pinList.map(x => x.id + " " + (x.sub || "")), p.use, p.info].join(" ").toLowerCase();
+    cards.push(c);
+  }
+  const search = el("input", { type: "search", class: "lib-search", id: "lib-search", placeholder: "Search name, pin, use…  ( / )", "aria-label": "Search parts" });
+  const countEl = el("span", { class: "lib-count", id: "lib-count" });
+  let cat = "all";
+  const chips = [["all", "All"], ...CATS].map(([k, label]) => {
+    const n = k === "all" ? ids.length : ids.filter(i => catalog[i].category === k).length;
+    const b = el("button", { type: "button", class: "chip-btn", "data-cat": k, "aria-pressed": String(k === cat) }, `${label} ${n}`);
+    b.addEventListener("click", () => { cat = k; chips.forEach(c => c.setAttribute("aria-pressed", String(c.dataset.cat === k))); apply(); });
+    return b;
+  });
+  const sections = CATS.map(([k, label]) => { const s = panel(label.toUpperCase(), "", "lib-cat", el("div", { class: "lib-grid" }, cards.filter(c => c.dataset.cat === k))); s.dataset.cat = k; return s; });
+  function apply() {
+    const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean); let n = 0;
+    for (const c of cards) { const show = (cat === "all" || c.dataset.cat === cat) && q.every(w => c.dataset.q.includes(w)); c.hidden = !show; if (show) n++; }
+    for (const s of sections) s.hidden = !cards.some(c => c.dataset.cat === s.dataset.cat && !c.hidden);
+    countEl.textContent = n === ids.length ? `${ids.length} parts` : `${n} of ${ids.length} parts`;
+  }
+  search.addEventListener("input", apply);
+  let back = null;
+  try { if (document.referrer && new URL(document.referrer).origin === location.origin) back = el("a", { class: "btn sm", id: "lib-back", href: document.referrer }, "← back"); } catch (e) { /* no usable referrer */ }
+  const head = panel(null, "", "lib-head", el("div", { class: "lib-row" }, el("h1", null, "COMPONENT LIBRARY"), back, countEl, el("span", { class: "sp" }), search), el("div", { class: "chips" }, chips));
+  root.append(el("div", { class: "cv" }, head, sections));
+  apply(); fitStickers(stickers); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitStickers(stickers));
+  document.addEventListener("keydown", (e) => { if (e.key === "/" && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { e.preventDefault(); search.focus(); } });
+  if (!document.title) document.title = "Component library";
+  return cards.length;
+}
+
+if (typeof window !== "undefined") window.CircutiViz = { validate, render, renderLibrary };
+if (typeof document !== "undefined") {
+  if (document.body && document.body.dataset.view === "library") renderLibrary(window.CIRCUTIVIZ_PARTS);
+  else render(window.CIRCUIT, window.CIRCUTIVIZ_PARTS);
+}
 })();

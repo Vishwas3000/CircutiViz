@@ -13,6 +13,7 @@ Vanilla JS; the only external script is GSAP from cdnjs (optional, the page work
 | `components.js` | the parts catalog (`window.CIRCUTIVIZ_PARTS`): boards, sensors, displays, actuators with pins, io types, one-sentence pin descriptions and a gotcha. |
 | `validate.js` | `node validate.js path/to/wiring.js` — runs the engine's `validate()` in a node `vm` sandbox, no browser. Exit 1 on problems. |
 | `index.html` + `examples/blink.js` | demo project (XIAO ESP32C3 + LED + resistor + button). |
+| `library.html` | the component library: every catalog part drawn with its pins, what it is, when to use it, pin table, datasheet, Copy snippet. Same two script tags with `<body data-view="library">`; the engine then runs `CircutiViz.renderLibrary()` instead of `render()`. |
 | `template/wiring.html` + `template/wiring.js` | starting point for a new project; every field commented. |
 | `README.md` | this text plus a short intro. |
 
@@ -24,7 +25,7 @@ Load order in a page: `gsap.min.js` (optional) → `components.js` → the proje
 2. Copy `template/wiring.html` and `template/wiring.js` to the project root. The HTML already loads
    `circutiviz/components.js`, `wiring.js`, `circutiviz/circutiviz.js` in that order; change only the `<title>`.
 3. Edit `wiring.js`: parts (by catalog id + x/y), rails, stages with wires, a Check per stage.
-4. Validate: `node circutiviz/validate.js wiring.js` → `OK` or a list of problems (the page shows the same
+4. Validate: `node circutiviz/validate.js wiring.js` → `OK` or a list of problems (`node circutiviz/validate.js --catalog` checks the catalog itself) (the page shows the same
    problems in a red banner, and opening the page with `#selftest` logs the summary to the console and in a green banner).
 5. Look at it: `python3 -m http.server 8000` in the project root, open `http://localhost:8000/wiring.html`
    (opening the file directly also works). Headless visual check:
@@ -42,6 +43,7 @@ window.CIRCUIT = {
   id: "beetletrail-v1",            // required; localStorage key base for progress and layout
   title: "BeetleTrail wiring",     // optional (falls back to id)
   subtitle: "one line",            // optional
+  libraryHref: "circutiviz/library.html", // optional; the header LIBRARY link (default "library.html", i.e. the engine folder is the page folder)
   notes: ["paragraph", "..."],     // optional; shown under the header; `backticks` render as code
   canvas: { w: 1000, h: 640 },     // optional; SVG units, default 1000 x 640; parts must fit inside
   colors: { key: "#hex" },         // optional; add or override wire colour keys (an object {light,dark} is accepted; dark is used)
@@ -81,6 +83,8 @@ Wire steps are counted in the progress pill ("7 / 18 wires"); task steps have a 
   name: "GY-271 (QMC5883L compass)", // printed under the part and in the pin map
   short: "GY-271",                     // used in step labels ("GY-271 SCL → Beetle 20 (SCL)"); defaults to name
   kind: "module",                      // "board" | "module" | "component" (components get short leads: LED, resistor, button)
+  category: "sensors",                 // "boards" | "sensors" | "displays" | "actuators" | "radio" | "power" | "passives" | "interface" (library grouping)
+  use: "Use it when the project needs a compass heading rather than motion.", // one beginner sentence: when/why you reach for it
   w: 160, h: 120,                      // body size in canvas units; pin pitch 22 = 2.54 mm, so a 15-pin row needs about 15*22+40
   style: "blue",                       // "black" | "blue" | "green" | "purple" | any CSS colour; light fills get dark labels automatically
   pitch: 22, pinStart: 16,             // optional; pins are centred on the edge unless pinStart (distance to the first pin) is given
@@ -114,9 +118,9 @@ object shape above.
    `pinOrderVaries: true`. Never invent a pin.
 2. Add an entry with the pattern above: kebab-case id (`vendor-board` or `chip-function`), pins in physical order,
    `id` exactly as the silkscreen prints it (`3V3`, `D7`, `GP16`, `BLK`), GPIO numbers or bus roles as `sub`.
-3. Write `info` as two or three sentences: what it is, which bus, which voltage, the one gotcha people hit.
+3. Write `use` (one sentence: when/why a beginner reaches for it) and `info` (two or three sentences: what it is, which bus, which voltage, the one gotcha people hit). Pick the `category`.
 4. Size it so the longest pin row fits: `rows * 22 + 40`; keep `w >= 110` when pins are on both sides (labels need room).
-5. Validate a project that uses it (`node validate.js ...`) and look at it once (screenshot command above).
+5. Run `node validate.js --catalog` (every entry needs name, short, kind, category, use, info, w, h, pins; every pin id, io, desc; rows must fit the body), then validate a project that uses it and look at it in `library.html` (search finds it by name, pin label or any word of `use`/`info`). The library's Copy snippet gives `{ id: "<short lowercased, spaces→->", part: "<catalog id>", x: 0, y: 0 }` for a project's `parts`.
 
 ## Conventions for project data
 
